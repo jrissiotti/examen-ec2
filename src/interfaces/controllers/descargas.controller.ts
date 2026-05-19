@@ -1,4 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
+import { Descarga } from '../../domain/entities/descarga';
+import { workerPool } from '../../shared/utils/workerPool';
+
+export const descargasRepository = new Map<string, Descarga>();
 
 /**
  * POST /api/descargas
@@ -12,16 +16,23 @@ export const crearDescarga = async (
     const { url, tipo, maxReintentos = 3 } = req.body;
 
     // TODO: Student implementation
-    // - Validate URL
+    // - Validate URL -> Se valida automáticamente al instanciar el Value Object dentro de Descarga
     // - Create Descarga entity
-    // - Get WorkerPool
-    // - Enqueue task
+    const descarga = new Descarga(url, tipo);
+    descargasRepository.set(descarga.id, descarga);
+
+    workerPool.enqueue({
+      id: descarga.id,
+      url: descarga.url.valor,
+      tipo: descarga.tipo as 'http' | 'ftp' | 'mock',
+      maxReintentos
+    }).catch(err => console.error(`Error encolando tarea ${descarga.id}:`, err));
 
     res.status(201).json({
-      id: 'xxx',
+      id: descarga.id,
       url,
       tipo,
-      estado: 'PENDIENTE',
+      estado: descarga.estado,
       mensaje: 'Descarga encolada'
     });
   } catch (error) {
@@ -42,12 +53,18 @@ export const obtenerEstadoDescarga = async (
 
     // TODO: Student implementation
     // - Query repository
+    const descarga = descargasRepository.get(id);
+
+    if (!descarga) {
+      res.status(404).json({ error: 'Descarga no encontrada' });
+      return;
+    }
 
     res.json({
-      id,
-      estado: 'EN_PROGRESO',
-      progreso: 45,
-      intentos: 1
+      id: descarga.id,
+      estado: descarga.estado,
+      progreso: descarga.progreso,
+      intentos: descarga.intentos
     });
   } catch (error) {
     next(error);
@@ -65,10 +82,18 @@ export const listarDescargas = async (
   try {
     // TODO: Student implementation
     // - Query repository
+    const lista = Array.from(descargasRepository.values());
 
     res.json({
-      descargas: [],
-      total: 0
+      descargas: lista.map(d => ({
+        id: d.id,
+        url: d.url.valor,
+        tipo: d.tipo,
+        estado: d.estado,
+        progreso: d.progreso,
+        intentos: d.intentos
+      })),
+      total: lista.length
     });
   } catch (error) {
     next(error);
@@ -88,10 +113,25 @@ export const reintentarDescarga = async (
 
     // TODO: Student implementation
     // - Validate state
+    const descarga = descargasRepository.get(id);
+
+    if (!descarga) {
+      res.status(404).json({ error: 'Descarga no encontrada' });
+      return;
+    }
+
     // - Re-enqueue
+    descarga.actualizarProgreso(0);
+    
+    workerPool.enqueue({
+      id: descarga.id,
+      url: descarga.url.valor,
+      tipo: descarga.tipo as 'http' | 'ftp' | 'mock',
+      maxReintentos: 3
+    }).catch(err => console.error(err));
 
     res.json({
-      id,
+      id: descarga.id,
       estado: 'REINTENTANDO',
       mensaje: 'Descarga reencolada'
     });
