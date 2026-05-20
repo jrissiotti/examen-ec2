@@ -5,7 +5,6 @@ import { config } from '../config';
 import { logger } from './logger';
 import { descargasRepository } from '../../interfaces/controllers/descargas.controller';
 import { EstadoDescarga } from '../enums';
-import { ErrorDescarga } from '../../domain/errors';
 
 /**
  * Worker pool for concurrent downloads
@@ -20,8 +19,6 @@ export class WorkerPool {
   private workers: Worker[] = [];
   private cola: Tarea[] = [];
   private tareasEnProgreso: Map<number, boolean> = new Map();
-  
-  private promesasActivas: Map<string, { resolver: Function; rechazar: Function }> = new Map();
 
   constructor() {
     this.inicializarWorkers();
@@ -31,17 +28,39 @@ export class WorkerPool {
     const workerPath = path.join(config.WORKERS_PATH, 'descargaWorker.ts');
 
     for (let i = 0; i < config.MAX_CONCURRENT_WORKERS; i++) {
-      const worker = new Worker(workerPath);
+      const worker = new Worker(workerPath, {
+        execArgv: ['-r', 'ts-node/register']
+      });
 
-      worker.on('message', (respuesta: any) => {
+      worker.on('message', (respuesta: RespuestaWorker) => {
         logger.debug(`Worker ${i} completed task ${respuesta.id}`);
         
         // TODO: Handle the response and release worker
-        this.manejarRespuesta(respuesta, i);
+        // 1. Buscamos y actualizamos la entidad en el repositorio global
+        const descarga = descargasRepository.get(respuesta.id);
+        if (descarga) {
+          if (respuesta.success) {
+            descarga.estado = EstadoDescarga.COMPLETADA;
+            descarga.progreso = 100;
+            descarga.data = respuesta.data;
+          } else {
+            descarga.estado = EstadoDescarga.FALLIDA;
+            descarga.error = respuesta.error || 'Error en la descarga';
+          }
+          descarga.tiempoFin = Date.now();
+        }
+
+        // 2. Liberamos el worker marcándolo como no ocupado
+        this.tareasEnProgreso.set(i, false);
+
+        // 3. Procesamos el siguiente elemento en la cola si existe
+        this.procesarCola();
       });
 
       worker.on('error', (error) => {
         logger.error(`Worker ${i} error`, error);
+        this.tareasEnProgreso.set(i, false);
+        this.procesarCola();
       });
 
       this.workers.push(worker);
@@ -49,38 +68,6 @@ export class WorkerPool {
     }
 
     logger.info(`Worker pool of ${config.MAX_CONCURRENT_WORKERS} initialized`);
-  }
-
-  private manejarRespuesta(respuesta: any, workerIndex: number): void {
-
-    this.tareasEnProgreso.set(workerIndex, false);
-
-    const { id, success, data, error, codigoError, progreso, tipoMensaje } = respuesta;
-    const descarga = descargasRepository.get(id);
-
-    if (tipoMensaje === 'PROGRESO' && descarga) {
-      if (descarga.estado !== EstadoDescarga.EN_PROGRESO) {
-        descarga.iniciar();
-      }
-      descarga.actualizarProgreso(progreso);
-      return;
-    }
-
-    const promesas = this.promesasActivas.get(id);
-    this.promesasActivas.delete(id);
-
-    if (descarga) {
-      if (success) {
-
-        descarga.completar(data ? Buffer.from(data) : Buffer.alloc(0));
-        if (promesas) promesas.resolver({ id, success: true, data });
-      } else {
-        descarga.fallar(new ErrorDescarga(error || 'Error desconocido', codigoError || 'SERVER_ERROR'));
-        if (promesas) promesas.resolver({ id, success: false, error });
-      }
-    }
-
-    this.procesarCola();
   }
 
   async enqueue(mensaje: MensajeWorker): Promise<RespuestaWorker> {
@@ -103,16 +90,22 @@ export class WorkerPool {
         if (tarea) {
           // - Mark it as busy
           this.tareasEnProgreso.set(i, true);
-          
-          // Guardamos el control de la promesa activa indexada por ID de descarga antes de despacharla
-          this.promesasActivas.set(tarea.mensaje.id, {
-            resolver: tarea.resolver,
-            rechazar: tarea.rechazar
-          });
 
-          // Actualizamos el estado de la entidad en el dominio a EN_PROGRESO justo antes de enviarla
+          // Escuchamos el evento de este worker una única vez para resolver la promesa del enqueue
+          const manejarRespuestaUnica = (respuesta: RespuestaWorker) => {
+            if (respuesta.id === tarea.mensaje.id) {
+              tarea.resolver(respuesta);
+              this.workers[i].off('message', manejarRespuestaUnica);
+            }
+          };
+          this.workers[i].on('message', manejarRespuestaUnica);
+
+          // Actualizamos el estado del dominio a EN_PROGRESO al iniciar la transferencia
           const descarga = descargasRepository.get(tarea.mensaje.id);
-          if (descarga) descarga.iniciar();
+          if (descarga) {
+            descarga.estado = EstadoDescarga.EN_PROGRESO;
+            descarga.intentos = (descarga.intentos ?? 0) + 1;
+          }
 
           // - Send the task
           this.workers[i].postMessage(tarea.mensaje);
@@ -123,9 +116,6 @@ export class WorkerPool {
 
   destruir(): void {
     this.workers.forEach((worker) => worker.terminate());
-    this.cola = [];
-    this.tareasEnProgreso.clear();
-    this.promesasActivas.clear();
     logger.info('WorkerPool destroyed');
   }
 }

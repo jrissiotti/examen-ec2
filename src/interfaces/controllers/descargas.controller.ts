@@ -1,8 +1,21 @@
 import { Request, Response, NextFunction } from 'express';
-import { Descarga } from '../../domain/entities/descarga';
-import { workerPool } from '../../shared/utils/workerPool';
+import { IniciarDescargaUseCase } from '../../application/descargas/iniciarDercargaUseCase';
+import { ObtenerEstadoUseCase } from '../../application/descargas/consultarEstadoUseCase';
+import { ReintentarDescargaUseCase } from '../../application/descargas/reintentarDescargaUseCase';
+import { EstadoDescarga } from '../../shared/enums/index';
 
-export const descargasRepository = new Map<string, Descarga>();
+class MemoryRepository {
+  private items = new Map<string, any>();
+  save(item: any) { this.items.set(item.id, item); }
+  get(id: string) { return this.items.get(id); }
+  getAll() { return Array.from(this.items.values()); }
+}
+export const descargasRepository = new MemoryRepository();
+
+// Instanciamos los Casos de Uso a application
+const iniciarDescargaUC = new IniciarDescargaUseCase();
+const obtenerEstadoUC = new ObtenerEstadoUseCase();
+const reintentarDescargaUC = new ReintentarDescargaUseCase();
 
 /**
  * POST /api/descargas
@@ -15,23 +28,13 @@ export const crearDescarga = async (
   try {
     const { url, tipo, maxReintentos = 3 } = req.body;
 
-    // TODO: Student implementation
-    // - Validate URL -> Se valida automáticamente al instanciar el Value Object dentro de Descarga
-    // - Create Descarga entity
-    const descarga = new Descarga(url, tipo);
-    descargasRepository.set(descarga.id, descarga);
-
-    workerPool.enqueue({
-      id: descarga.id,
-      url: descarga.url.valor,
-      tipo: descarga.tipo as 'http' | 'ftp' | 'mock',
-      maxReintentos
-    }).catch(err => console.error(`Error encolando tarea ${descarga.id}:`, err));
+    // Delegamos la lógica de negocio al caso de uso correspondiente
+    const descarga = await iniciarDescargaUC.ejecutar({ url, tipo, maxReintentos });
 
     res.status(201).json({
       id: descarga.id,
-      url,
-      tipo,
+      url: descarga.url, 
+      tipo: descarga.tipo,
       estado: descarga.estado,
       mensaje: 'Descarga encolada'
     });
@@ -51,20 +54,21 @@ export const obtenerEstadoDescarga = async (
   try {
     const { id } = req.params;
 
-    // TODO: Student implementation
-    // - Query repository
-    const descarga = descargasRepository.get(id);
+    // Invocamos el caso de uso para obtener la entidad del dominio
+    const descarga = obtenerEstadoUC.ejecutar(id);
 
     if (!descarga) {
-      res.status(404).json({ error: 'Descarga no encontrada' });
+      res.status(404).json({ message: 'Descarga no encontrada' });
       return;
     }
 
     res.json({
       id: descarga.id,
+      url: descarga.url,
+      tipo: descarga.tipo,
       estado: descarga.estado,
-      progreso: descarga.progreso,
-      intentos: descarga.intentos
+      progreso: descarga.progreso ?? 0,
+      intentos: descarga.intentos ?? 0
     });
   } catch (error) {
     next(error);
@@ -80,20 +84,22 @@ export const listarDescargas = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    // TODO: Student implementation
-    // - Query repository
-    const lista = Array.from(descargasRepository.values());
+    const todas = descargasRepository.getAll();
 
+    // Mapeamos los datos exponiendo de forma explícita el progreso y los intentos de la entidad
     res.json({
-      descargas: lista.map(d => ({
+      descargas: todas.map(d => ({
         id: d.id,
-        url: d.url.valor,
+        url: d.url,
         tipo: d.tipo,
         estado: d.estado,
-        progreso: d.progreso,
-        intentos: d.intentos
+        progreso: d.progreso ?? 0,    // Muestra el porcentaje en tiempo real (0-100%)
+        intentos: d.intentos ?? 0      // Muestra cuántas veces ha pasado por el pool o reintentos
       })),
-      total: lista.length
+      total: todas.length,
+      completadas: todas.filter(d => d.estado === EstadoDescarga.COMPLETADA).length,
+      pendientes: todas.filter(d => d.estado === EstadoDescarga.PENDIENTE || d.estado === EstadoDescarga.EN_PROGRESO).length,
+      fallidas: todas.filter(d => d.estado === EstadoDescarga.FALLIDA).length
     });
   } catch (error) {
     next(error);
@@ -111,28 +117,12 @@ export const reintentarDescarga = async (
   try {
     const { id } = req.params;
 
-    // TODO: Student implementation
-    // - Validate state
-    const descarga = descargasRepository.get(id);
-
-    if (!descarga) {
-      res.status(404).json({ error: 'Descarga no encontrada' });
-      return;
-    }
-
-    // - Re-enqueue
-    descarga.actualizarProgreso(0);
-    
-    workerPool.enqueue({
-      id: descarga.id,
-      url: descarga.url.valor,
-      tipo: descarga.tipo as 'http' | 'ftp' | 'mock',
-      maxReintentos: 3
-    }).catch(err => console.error(err));
+    // Invocamos el caso de uso para resetear el estado y volver a meterlo al pool
+    const descarga = await reintentarDescargaUC.ejecutar(id);
 
     res.json({
       id: descarga.id,
-      estado: 'REINTENTANDO',
+      estado: descarga.estado,
       mensaje: 'Descarga reencolada'
     });
   } catch (error) {

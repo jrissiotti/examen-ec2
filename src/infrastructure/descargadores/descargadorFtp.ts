@@ -1,23 +1,31 @@
 import { DescargadorBase } from '../../domain/abstract/descargadorBase';
-import { IDescargable } from '../../domain/interfaces/iDescargable';
 import { ErrorServidor } from '../../domain/errors/index';
 
-export class DescargadorFtp extends DescargadorBase implements IDescargable {
+export class DescargadorFtp extends DescargadorBase {
 
   async descargar(url: string): Promise<Buffer> {
     return this.ejecutarConReintento(async () => {
-      // Simulación FTP asíncrona
-      await new Promise(resolve => setTimeout(resolve, 1200));
+      this.progreso = 10;
+      // Simulación FTP asíncrona estructurada para ver crecimiento del progreso
+      await new Promise(resolve => setTimeout(resolve, 400));
+      this.progreso = 40;
+      
+      await new Promise(resolve => setTimeout(resolve, 400));
+      this.progreso = 80;
 
       // Simular fallo aleatorio del 25% exigido por el enunciado
       if (Math.random() < 0.25) {
+        this.progreso = 0;
         throw new ErrorServidor();
       }
 
+      await new Promise(resolve => setTimeout(resolve, 400));
+      this.progreso = 100;
       return Buffer.from(`Datos FTP simulados desde: ${url}`);
     });
   }
 
-  cancelar(): void {}
-  getProgreso(): number { return 0; }
+  cancelar(): void {
+    this.cancelado = true;
+  }
 }

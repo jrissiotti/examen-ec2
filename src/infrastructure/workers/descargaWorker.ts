@@ -11,56 +11,38 @@ if (!parentPort) {
 }
 
 parentPort.on('message', async (mensaje: MensajeWorker) => {
-  const { id, url, tipo, maxReintentos } = mensaje;
-
   try {
-    logger.debug(`Worker starting download: ${id}`);
+    logger.debug(`Worker starting download: ${mensaje.id}`);
+
+    const { id, url, tipo, maxReintentos } = mensaje;
 
     // TODO: Student implementation
     // 1. Instantiate downloader by type
     const descargador = DescargadorFactory.crear(tipo);
 
-    // Reportamos un progreso inicial en tiempo real
-    parentPort!.postMessage({
-      id,
-      tipoMensaje: 'PROGRESO',
-      progreso: 15
-    });
-
     // 2. Call ejecutarConReintento()
-    // El descargador ejecuta internamente los reintentos automáticos configurados
-    const data = await descargador.descargar(url);
-
-    // Reportamos un progreso intermedio antes de finalizar
-    parentPort!.postMessage({
-      id,
-      tipoMensaje: 'PROGRESO',
-      progreso: 70
-    });
+    // Ejecutamos la descarga usando el método de reintentos de la clase abstracta
+    const data = await descargador.ejecutarConReintento(
+      async () => await descargador.descargar(url),
+      maxReintentos
+    );
 
     // 3. Send result to main thread
-    // Convertimos el Buffer a una estructura plana (Uint8Array -> Array) segura para pasarse entre hilos
-    const respuesta = {
+    const respuesta: RespuestaWorker = {
       id,
-      tipoMensaje: 'FINALIZADO',
       success: true,
-      data: Array.from(new Uint8Array(data)),
-      progreso: 100
+      data: data,
+      intentos: 1
     };
 
     parentPort!.postMessage(respuesta);
-
-  } catch (error: any) {
-    logger.error(`Worker failed processing task ${id}: ${error.message}`);
-
-    // Mapeamos el error hacia la estructura que espera decodificar el pool en el hilo principal
-    const respuesta = {
-      id,
-      tipoMensaje: 'FINALIZADO',
+  } catch (error) {
+    const respuesta: RespuestaWorker = {
+      id: mensaje.id,
       success: false,
       error: error instanceof Error ? error.message : 'Error desconocido',
-      codigoError: error.codigo || 'SERVER_ERROR',
-      progreso: 0
+      codigo: (error as { codigo?: string })?.codigo || 'UNKNOWN_ERROR',
+      intentos: 0
     };
 
     parentPort!.postMessage(respuesta);
