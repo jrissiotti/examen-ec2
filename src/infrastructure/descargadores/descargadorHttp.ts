@@ -8,17 +8,16 @@ export class DescargadorHttp extends DescargadorBase {
   async descargar(url: string): Promise<Buffer> {
     return this.ejecutarConReintento(async () => {
       try {
-        this.progreso = 5; // Inicio de conexión
+        this.progreso = 5;
         
         const response = await axios.get(url, {
           responseType: 'arraybuffer',
-          timeout: this.timeoutMs, // Usamos los 5000ms heredados de la clase base
+          timeout: this.timeoutMs,
           onDownloadProgress: (progressEvent) => {
             if (progressEvent.total) {
-              // Calculamos el progreso real del flujo de datos de red
               this.progreso = Math.round((progressEvent.loaded * 100) / progressEvent.total);
             } else {
-              this.progreso = 50; // Progreso estimado si no viene el header content-length
+              this.progreso = 50;
             }
           }
         });
@@ -28,12 +27,10 @@ export class DescargadorHttp extends DescargadorBase {
       } catch (error: any) {
         this.progreso = 0;
         
-        // Si Axios falló por Timeout de red (código ECONNABORTED o timeout manual)
         if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
           throw new ErrorTimeout();
         }
 
-        // Si el servidor respondió con un código de estado de error (4xx, 5xx)
         if (error.response) {
           const status = error.response.status;
           if (status === 404) {
@@ -44,7 +41,6 @@ export class DescargadorHttp extends DescargadorBase {
           }
         }
 
-        // Si es cualquier otro error de conexión de red, lo mapeamos a error de servidor genérico
         throw new ErrorServidor();
       }
     });

@@ -1,6 +1,7 @@
 import { Descarga } from '../../domain/entities/descarga';
 import { workerPool } from '../../shared/utils/workerPool';
 import { descargasRepository } from '../../interfaces/controllers/descargas.controller';
+import { SystemSaturatedException } from '../exceptions/systemSaturatedException';
 
 interface IniciarDescargaInput {
   url: string;
@@ -10,14 +11,16 @@ interface IniciarDescargaInput {
 
 export class IniciarDescargaUseCase {
   async ejecutar(input: IniciarDescargaInput): Promise<Descarga> {
-    const id = `dl_${Math.random().toString(36).substring(2, 9)}`;
+    // Si el pool ya tiene demasiadas tareas (ej. más de 50), lanzamos saturación
+    const tamañoCola = (workerPool as any).queue?.length || (workerPool as any).cola?.length || 0;
+    if (tamañoCola > 50) {
+      throw new SystemSaturatedException('El buffer del sistema de descargas se encuentra saturado.');
+    }
 
-    // Instanciamos con los parámetros de tu entidad nativa
+    const id = Descarga.generarId();
     const nuevaDescarga = new Descarga(id, input.url, input.tipo);
     
     descargasRepository.save(nuevaDescarga);
-
-    // CORRECCIÓN: Volvemos a usar el método original del pool sin el bonus
     (workerPool as any).enqueue ? (workerPool as any).enqueue(nuevaDescarga) : (workerPool as any).encolarTarea(nuevaDescarga);
 
     return nuevaDescarga;

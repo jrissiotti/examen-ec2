@@ -7,7 +7,6 @@ export abstract class DescargadorBase implements IDescargable {
   protected progreso = 0;
   protected cancelado = false;
 
-  // Método abstracto obligatorio requerido por el enunciado
   public abstract descargar(url: string): Promise<Buffer>;
 
   public cancelar(): void {
@@ -18,7 +17,6 @@ export abstract class DescargadorBase implements IDescargable {
     return this.progreso;
   }
 
-  // Se vuelve público para cumplir con la reutilización obligatoria
   public async ejecutarConReintento<T>(
     fn: () => Promise<T>,
     maxIntentos: number = 3
@@ -52,7 +50,6 @@ export abstract class DescargadorBase implements IDescargable {
         }
 
         if (intento < maxIntentos) {
-          // Backoff exponencial exacto: 1000ms * 2^(intento-1)
           const delay = this.backoffBaseMs * Math.pow(2, intento - 1);
           await new Promise(resolve => setTimeout(resolve, delay));
           continue;

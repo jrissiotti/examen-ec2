@@ -1,5 +1,6 @@
 import { EstadoDescarga } from '../../shared/enums';
 import { IReportable } from '../interfaces/iReportable';
+import { v4 as uuidv4 } from 'uuid';
 
 export class Descarga implements IReportable {
   public progreso: number = 0;
@@ -46,5 +47,9 @@ export class Descarga implements IReportable {
       intentos: this.intentos,
       tiempoTotal: (this.tiempoFin || Date.now()) - this.tiempoInicio
     };
+  }
+
+  public static generarId(): string {
+    return uuidv4();
   }
 }

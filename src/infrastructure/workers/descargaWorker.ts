@@ -3,9 +3,6 @@ import { MensajeWorker, RespuestaWorker } from '../../shared/types';
 import { logger } from '../../shared/utils/logger';
 import { DescargadorFactory } from '../../domain/factories/descargadorFactory';
 
-/**
- * Worker that executes downloads in isolation
- */
 if (!parentPort) {
   throw new Error('This script must be executed as a Worker');
 }
@@ -13,21 +10,19 @@ if (!parentPort) {
 parentPort.on('message', async (mensaje: MensajeWorker) => {
   try {
     logger.debug(`Worker starting download: ${mensaje.id}`);
-
+    
     const { id, url, tipo, maxReintentos } = mensaje;
 
-    // TODO: Student implementation
-    // 1. Instantiate downloader by type
+    // 1. Instanciamos el descargador por tipo usando la Factory nativa del dominio
     const descargador = DescargadorFactory.crear(tipo);
 
-    // 2. Call ejecutarConReintento()
-    // Ejecutamos la descarga usando el método de reintentos de la clase abstracta
+    // 2. Ejecutamos la descarga usando el método original de la clase abstracta
     const data = await descargador.ejecutarConReintento(
       async () => await descargador.descargar(url),
       maxReintentos
     );
 
-    // 3. Send result to main thread
+    // 3. Enviamos el resultado final al hilo principal sin pasos intermedios inventados
     const respuesta: RespuestaWorker = {
       id,
       success: true,
@@ -36,12 +31,12 @@ parentPort.on('message', async (mensaje: MensajeWorker) => {
     };
 
     parentPort!.postMessage(respuesta);
-  } catch (error) {
+  } catch (error: any) {
     const respuesta: RespuestaWorker = {
       id: mensaje.id,
       success: false,
       error: error instanceof Error ? error.message : 'Error desconocido',
-      codigo: (error as { codigo?: string })?.codigo || 'UNKNOWN_ERROR',
+      codigo: error?.codigo || 'UNKNOWN_ERROR',
       intentos: 0
     };
 

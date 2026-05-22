@@ -13,7 +13,6 @@ export class DescargadorFtp extends DescargadorBase {
       await new Promise(resolve => setTimeout(resolve, 400));
       this.progreso = 80;
 
-      // Simular fallo aleatorio del 25% exigido por el enunciado
       if (Math.random() < 0.25) {
         this.progreso = 0;
         throw new ErrorServidor();
